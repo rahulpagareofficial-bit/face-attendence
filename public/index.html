@@ -28,7 +28,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;bord
 
   <div id="login" class="card">
     <input id="pw" type="password" placeholder="Admin password">
-    <button class="p" onclick="login()">Login</button>
+    <button class="p" onclick="login()">Log in</button>
     <span id="lerr" class="er"></span>
   </div>
 
@@ -42,14 +42,14 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;bord
 
     <div class="card" id="camcard">
       <video id="v" autoplay muted playsinline></video>
-      <div id="status">Loading models...</div>
+      <div id="status">Loading face recognition... please wait.</div>
     </div>
 
     <div class="card hide" id="p-register">
       <input id="rn" placeholder="Roll No">
       <input id="nm" placeholder="Full Name">
       <button class="p" id="regbtn" onclick="register()">Capture &amp; Register</button>
-      <p class="mu">Seedha camera ki taraf dekho, achi light me. 3 samples capture honge.</p>
+      <p class="mu">Look straight at the camera in good lighting. Three quick samples will be captured.</p>
     </div>
 
     <div class="card hide" id="p-students"><table id="stt"></table></div>
@@ -91,6 +91,8 @@ async function start() {
   $('#dt').value = TODAY;
   if (booted) return; booted = true;
   try {
+    try { await faceapi.tf.setBackend('webgl'); } catch (_) {}
+    await faceapi.tf.ready();
     await Promise.all([
       faceapi.nets.tinyFaceDetector.loadFromUri(MODEL),
       faceapi.nets.faceLandmark68Net.loadFromUri(MODEL),
@@ -98,9 +100,14 @@ async function start() {
     v.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
     await v.play();
     await loadStudents();
-    status('Ready - camera ke saamne aao', 'mu');
+    status('Ready. Please look at the camera.', 'mu');
     setInterval(scanLoop, 800);
-  } catch (e) { status('Error: ' + e.message, 'er'); }
+  } catch (e) {
+    const m = e.name === 'NotAllowedError' ? 'Camera access was blocked. Please allow camera permission in your browser and refresh the page.'
+      : e.name === 'NotFoundError' ? 'No camera was found on this device.'
+      : 'Something went wrong while starting: ' + e.message;
+    status(m, 'er');
+  }
 }
 
 async function loadStudents() {
@@ -109,25 +116,32 @@ async function loadStudents() {
     students.map(s => new faceapi.LabeledFaceDescriptors(s.id, [new Float32Array(s.descriptor)])), 0.5) : null;
 }
 
-const detect = () => faceapi.detectSingleFace(v, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
+const cv = document.createElement('canvas');
+async function detect() {
+  if (!v.videoWidth) return null;
+  cv.width = v.videoWidth; cv.height = v.videoHeight;
+  cv.getContext('2d').drawImage(v, 0, 0);
+  return faceapi.detectSingleFace(cv, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.3 }))
+    .withFaceLandmarks().withFaceDescriptor();
+}
 
 async function scanLoop() {
   if (mode !== 'scan' || busy || !booted) return;
   busy = true;
   try {
     const d = await detect();
-    if (!d) status('Face nahi dikha', 'mu');
-    else if (!matcher) status('Pehle students register karo', 'er');
+    if (!d) status('No face detected. Move closer, face the camera and make sure the room is well lit.', 'mu');
+    else if (!matcher) status('No students are registered yet. Please register someone first.', 'er');
     else {
       const m = matcher.findBestMatch(d.descriptor);
-      if (m.label === 'unknown') status('Unknown face', 'er');
+      if (m.label === 'unknown') status('Face not recognized. Please register first or try again.', 'er');
       else {
         const s = students.find(x => x.id === m.label);
         if (!done.has(s.id)) {
           const r = await api('attendance', { method: 'POST', body: JSON.stringify({ student_id: s.id }) });
           done.add(s.id);
-          status(r.already ? `${s.name} - already present` : `✅ ${s.name} - Present`, r.already ? 'mu' : 'ok');
-        } else status(`${s.name} - already marked`, 'mu');
+          status(r.already ? `${s.name}, your attendance is already marked for today.` : `✅ Welcome, ${s.name}! Your attendance has been marked.`, r.already ? 'mu' : 'ok');
+        } else status(`${s.name}, your attendance is already marked for today.`, 'mu');
       }
     }
   } catch (e) { status(e.message, 'er'); }
@@ -136,14 +150,15 @@ async function scanLoop() {
 
 async function register() {
   const roll_no = $('#rn').value.trim(), name = $('#nm').value.trim();
-  if (!roll_no || !name) return status('Roll No aur Name daalo', 'er');
+  if (!roll_no || !name) return status('Please enter both Roll No and Name.', 'er');
   busy = true; $('#regbtn').disabled = true;
   try {
     const samples = [];
     for (let i = 0; i < 3; i++) {
-      status(`Capturing ${i + 1}/3...`);
-      const d = await detect();
-      if (!d) throw new Error('Face detect nahi hua, dobara try karo');
+      status(`Capturing sample ${i + 1} of 3... please hold still.`);
+      let d = null;
+      for (let t = 0; t < 8 && !d; t++) { d = await detect(); if (!d) await new Promise(r => setTimeout(r, 400)); }
+      if (!d) throw new Error('We could not detect your face. Please look straight at the camera in good lighting and try again.');
       samples.push(d.descriptor);
       await new Promise(r => setTimeout(r, 500));
     }
@@ -151,7 +166,7 @@ async function register() {
     await api('students', { method: 'POST', body: JSON.stringify({ roll_no, name, descriptor: avg }) });
     await loadStudents();
     $('#rn').value = $('#nm').value = '';
-    status(`✅ ${name} registered`, 'ok');
+    status(`✅ ${name} has been registered successfully.`, 'ok');
   } catch (e) { status(e.message, 'er'); }
   busy = false; $('#regbtn').disabled = false;
 }
@@ -161,7 +176,7 @@ function renderStudents() {
     `<tr><td>${esc(s.roll_no)}</td><td>${esc(s.name)}</td><td><button class="d" onclick="del('${s.id}')">Delete</button></td></tr>`).join('');
 }
 async function del(id) {
-  if (!confirm('Delete this student and their attendance?')) return;
+  if (!confirm('Delete this student and all their attendance records? This cannot be undone.')) return;
   await api('students?id=' + id, { method: 'DELETE' }); await loadStudents(); renderStudents();
 }
 
@@ -191,7 +206,7 @@ $('#tabs').onclick = e => {
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b === e.target));
   ['register', 'students', 'report'].forEach(x => $('#p-' + x).classList.toggle('hide', x !== t));
   $('#camcard').classList.toggle('hide', t === 'students' || t === 'report');
-  if (t === 'scan') status('Ready - camera ke saamne aao', 'mu');
+  if (t === 'scan') status('Ready. Please look at the camera.', 'mu');
   if (t === 'students') renderStudents();
   if (t === 'report') loadReport();
 };

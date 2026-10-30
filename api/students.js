@@ -11,9 +11,9 @@ module.exports = async (req, res) => {
     if (req.method === 'POST') {
       const { roll_no, name, descriptor } = req.body || {};
       if (!roll_no || !name || !Array.isArray(descriptor) || descriptor.length !== 128)
-        return res.status(400).json({ error: 'Invalid data' });
+        return res.status(400).json({ error: 'Invalid details. Please capture your face again.' });
       const { data, error } = await sb.from('students').insert({ roll_no, name, descriptor }).select('id').single();
-      if (error) return res.status(error.code === '23505' ? 409 : 500).json({ error: error.code === '23505' ? 'Roll no already exists' : error.message });
+      if (error) return res.status(error.code === '23505' ? 409 : 500).json({ error: error.code === '23505' ? 'This Roll No is already registered.' : error.message });
       return res.json(data);
     }
     if (req.method === 'DELETE') {
@@ -21,7 +21,7 @@ module.exports = async (req, res) => {
       if (error) throw error;
       return res.json({ ok: true });
     }
-    res.status(405).json({ error: 'Method not allowed' });
+    res.status(405).json({ error: 'This action is not supported.' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

@@ -4,7 +4,7 @@ const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_K
 
 function auth(req, res) {
   if (!process.env.ADMIN_PASSWORD || req.headers['x-admin-key'] !== process.env.ADMIN_PASSWORD) {
-    res.status(401).json({ error: 'Wrong password' });
+    res.status(401).json({ error: 'Incorrect password. Please try again.' });
     return false;
   }
   return true;
